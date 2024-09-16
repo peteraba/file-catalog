@@ -3,3 +3,5 @@
 
 # Project
 *.csv
+
+dist/

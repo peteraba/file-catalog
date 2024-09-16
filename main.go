@@ -38,6 +38,11 @@ const (
 	MB = 1024 * 1024
 )
 
+const (
+	maxLines         = 100
+	defaultMinLength = 15
+)
+
 func main() {
 	app := &cli.App{
 		Commands: []*cli.Command{
@@ -109,12 +114,19 @@ func main() {
 			{
 				Name:    duplicates,
 				Aliases: []string{d},
+				Flags: []cli.Flag{
+					&cli.IntFlag{
+						Name:  "search-min-length",
+						Value: defaultMinLength,
+						Usage: "Find only exact-search terms (fast) or search by contains (slow)",
+					},
+				},
 				Action: func(cCtx *cli.Context) error {
 					db := NewDB(cCtx.Args().Get(0))
 
 					db.Load()
 
-					db.Duplicates()
+					db.Duplicates(cCtx.Int("search-min-length"))
 
 					err := db.Write()
 					if err != nil {
@@ -128,12 +140,19 @@ func main() {
 			{
 				Name:    stats,
 				Aliases: []string{s},
+				Flags: []cli.Flag{
+					&cli.IntFlag{
+						Name:  "search-min-length",
+						Value: defaultMinLength,
+						Usage: "Find only exact-search terms (fast) or search by contains (slow)",
+					},
+				},
 				Action: func(cCtx *cli.Context) error {
 					db := NewDB(cCtx.Args().Get(0))
 
 					db.Load()
 
-					db.Stats()
+					db.Stats(cCtx.Int("search-min-length"))
 
 					return nil
 				},
@@ -374,8 +393,6 @@ func pathToSearchTerms(filePath string) []string {
 	return terms
 }
 
-const maxLines = 100
-
 func (db *DB) Search(searchType string, searchTerms []string) {
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
@@ -542,7 +559,7 @@ func hashFile(path string, sampleSize int) (string, error) {
 		return "", fmt.Errorf("can't stat file: %s, err: %w", path, err)
 	}
 
-	if fi.Size() < 1024 {
+	if fi.Size() < MB {
 		sampleSize = int(fi.Size())
 	}
 
@@ -572,11 +589,7 @@ func hashFile(path string, sampleSize int) (string, error) {
 	return hex.EncodeToString(sum), nil
 }
 
-const (
-	minLength = 15
-)
-
-func (db *DB) Stats() {
+func (db *DB) Stats(minLength int) {
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
 
@@ -615,7 +628,7 @@ func (db *DB) Stats() {
 	}
 }
 
-func (db *DB) Duplicates() {
+func (db *DB) Duplicates(minLength int) {
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
 
