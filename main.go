@@ -43,30 +43,38 @@ const (
 	defaultMinLength = 15
 )
 
+const (
+	redBold    = "\033[1m\033[31m"
+	yellowBold = "\033[1m\033[33m"
+	blueBold   = "\033[1m\033[43m"
+	reset      = "\033[0m"
+)
+
+const (
+	flagMode            = "mode"
+	flagSearchMinLength = "search-min-length"
+)
+
 func main() {
-	app := &cli.App{
+	app := CreateApp(NewStdOut())
+
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func CreateApp(output Output) *cli.App {
+	return &cli.App{
 		Commands: []*cli.Command{
 			{
 				Name:  scanDir,
 				Usage: "Scan will scan a list of directories and store them in the DB file",
 				Action: func(cCtx *cli.Context) error {
-					db := NewDB(cCtx.Args().Get(0))
-
-					db.Load()
-
-					err := db.Scan(cCtx.Args().Slice()[1:]...)
-					if err != nil {
-						fmt.Printf("Error scanning directories: %v\n", err)
-						os.Exit(1)
-					}
-
-					err = db.Write()
-					if err != nil {
-						fmt.Printf("Error writing DB: %v\n", err)
-						os.Exit(1)
-					}
-
-					return nil
+					return ScanCommand(
+						output,
+						cCtx.Args().Get(0),
+						cCtx.Args().Slice()[1:],
+					)
 				},
 			},
 			{
@@ -74,41 +82,30 @@ func main() {
 				Aliases: []string{ts},
 				Flags: []cli.Flag{
 					&cli.StringFlag{
-						Name:  "mode",
-						Value: "slow",
+						Name:  flagMode,
+						Value: slow,
 						Usage: "Find only exact-search terms (fast) or search by contains (slow)",
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					db := NewDB(cCtx.Args().Get(0))
-
-					db.Load()
-
-					db.Search(cCtx.String("mode"), cCtx.Args().Slice()[1:])
-
-					return nil
+					return TermSearchCommand(
+						output,
+						cCtx.Args().Get(0),
+						cCtx.String(flagMode),
+						cCtx.Args().Slice()[1:],
+					)
 				},
 			},
 			{
 				Name:    fileSearch,
 				Aliases: []string{fs},
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:  "mode",
-						Value: "fast",
-						Usage: "Find only exact-search terms (fast) or search by contains (slow)",
-					},
-				},
 				Action: func(cCtx *cli.Context) error {
-					db := NewDB(cCtx.Args().Get(0))
-
-					db.Load()
-
-					searchTerms := pathToSearchTerms(cCtx.Args().Get(1))
-
-					db.Search(fast, searchTerms)
-
-					return nil
+					return FileSearchCommand(
+						output,
+						cCtx.Args().Get(0),
+						cCtx.String(flagMode),
+						cCtx.Args().Get(1),
+					)
 				},
 			},
 			{
@@ -116,25 +113,17 @@ func main() {
 				Aliases: []string{d},
 				Flags: []cli.Flag{
 					&cli.IntFlag{
-						Name:  "search-min-length",
+						Name:  flagSearchMinLength,
 						Value: defaultMinLength,
 						Usage: "Find only exact-search terms (fast) or search by contains (slow)",
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					db := NewDB(cCtx.Args().Get(0))
-
-					db.Load()
-
-					db.Duplicates(cCtx.Int("search-min-length"))
-
-					err := db.Write()
-					if err != nil {
-						fmt.Printf("Error writing DB: %v\n", err)
-						os.Exit(1)
-					}
-
-					return nil
+					return DuplicateCommand(
+						output,
+						cCtx.Args().Get(0),
+						cCtx.Int(flagSearchMinLength),
+					)
 				},
 			},
 			{
@@ -142,27 +131,123 @@ func main() {
 				Aliases: []string{s},
 				Flags: []cli.Flag{
 					&cli.IntFlag{
-						Name:  "search-min-length",
+						Name:  flagSearchMinLength,
 						Value: defaultMinLength,
 						Usage: "Find only exact-search terms (fast) or search by contains (slow)",
 					},
 				},
 				Action: func(cCtx *cli.Context) error {
-					db := NewDB(cCtx.Args().Get(0))
-
-					db.Load()
-
-					db.Stats(cCtx.Int("search-min-length"))
-
-					return nil
+					return StatsCommand(
+						output,
+						cCtx.Args().Get(0),
+						cCtx.Int(flagSearchMinLength),
+					)
 				},
 			},
 		},
 	}
+}
 
-	if err := app.Run(os.Args); err != nil {
-		log.Fatal(err)
+func ScanCommand(output Output, dbFile string, roots []string) error {
+	db := NewDB(output, dbFile)
+
+	db.Load()
+
+	err := db.Scan(roots...)
+	if err != nil {
+		output.Printf("Error scanning directories: %v\n", err)
+		output.Exit(1)
 	}
+
+	err = db.Write()
+	if err != nil {
+		output.Printf("Error writing DB: %v\n", err)
+		output.Exit(1)
+	}
+
+	return nil
+}
+
+func TermSearchCommand(output Output, dbFile, modeFlag string, searchTerms []string) error {
+	db := NewDB(output, dbFile)
+
+	db.Load()
+
+	db.Search(modeFlag, searchTerms)
+
+	return nil
+}
+
+func FileSearchCommand(output Output, dbFile, modeFlag, filePath string) error {
+	db := NewDB(output, dbFile)
+
+	db.Load()
+
+	searchTerms := pathToSearchTerms(filePath)
+
+	db.Search(modeFlag, searchTerms)
+
+	return nil
+}
+
+func DuplicateCommand(output Output, dbFile string, searchMinLength int) error {
+	db := NewDB(output, dbFile)
+
+	db.Load()
+
+	db.Duplicates(searchMinLength)
+
+	err := db.Write()
+	if err != nil {
+		output.Printf("Error writing DB: %v\n", err)
+		output.Exit(1)
+	}
+
+	return nil
+}
+
+func StatsCommand(output Output, dbFile string, searchMinLength int) error {
+	db := NewDB(output, dbFile)
+
+	db.Load()
+
+	db.Stats(searchMinLength)
+
+	return nil
+}
+
+type Output interface {
+	Println(a ...any)
+	Printf(format string, a ...any)
+	Scanln(a *string) error
+	Exit(code int)
+}
+
+type StdOut struct{}
+
+func (out *StdOut) Println(a ...any) {
+	fmt.Println(a...)
+}
+
+func (out *StdOut) Printf(format string, a ...any) {
+	fmt.Printf(format, a...)
+}
+
+func (out *StdOut) Scanln(a *string) error {
+	_, err := fmt.Scanln(&a)
+	if err != nil {
+		return fmt.Errorf("error scanning input: %w", err)
+	}
+
+	return nil
+}
+
+func (out *StdOut) Exit(code int) {
+	os.Exit(code)
+}
+
+func NewStdOut() *StdOut {
+	return &StdOut{}
 }
 
 type Record struct {
@@ -180,16 +265,18 @@ type DB struct {
 	Sizes       map[int][]ID
 	Hashes      map[string][]ID
 	SearchTerms map[string][]ID
+	output      Output
 	dbFile      string
 }
 
-func NewDB(dbFile string) *DB {
+func NewDB(output Output, dbFile string) *DB {
 	return &DB{
 		mutex:       &sync.RWMutex{},
 		Files:       make(map[ID]Record),
 		Sizes:       make(map[int][]ID),
 		Hashes:      make(map[string][]ID),
 		SearchTerms: make(map[string][]ID),
+		output:      output,
 		dbFile:      dbFile,
 	}
 }
@@ -200,9 +287,9 @@ func (db *DB) Load() {
 
 	records, err := readCsvFile(db.dbFile)
 	if err != nil {
-		fmt.Printf("Unable to read DB file %s, error: %v", db.dbFile, err)
+		db.output.Printf("Unable to read DB file '%s', error: %v", db.dbFile, err)
 
-		os.Exit(1)
+		db.output.Exit(1)
 	}
 
 	for _, record := range records {
@@ -213,14 +300,14 @@ func (db *DB) Load() {
 func readCsvFile(filePath string) ([][]string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("unable to read input file %s, err: %w", filePath, err)
+		return nil, fmt.Errorf("unable to read input file '%s', err: %w", filePath, err)
 	}
 	defer f.Close()
 
 	csvReader := csv.NewReader(f)
 	records, err := csvReader.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("unable to parse file as CSV for %s, err: %w", filePath, err)
+		return nil, fmt.Errorf("unable to parse file as CSV for '%s', err: %w", filePath, err)
 	}
 
 	return records, nil
@@ -231,7 +318,7 @@ func (db *DB) handleRecord(record []string) {
 
 	size, err := strconv.Atoi(record[1])
 	if err != nil {
-		fmt.Println("Unable to parse size from record. File path:", record[0], "Raw data:", record[1], ", error:", err.Error())
+		db.output.Println("Unable to parse size from record. File path:", record[0], "Raw data:", record[1], ", error:", err.Error())
 
 		return
 	}
@@ -242,7 +329,7 @@ func (db *DB) handleRecord(record []string) {
 
 	err = db.add(filePath, size, hash, searchTerms)
 	if err != nil {
-		fmt.Println("Unable to add record to DB, file path:", filePath, ", error:", err.Error())
+		db.output.Println("Unable to add record to DB, file path:", filePath, ", error:", err.Error())
 	}
 }
 
@@ -292,7 +379,7 @@ func (db *DB) handleMatches(root string, files map[string]struct{}) {
 
 		err := db.handleMatch(filename)
 		if err != nil {
-			fmt.Println(err.Error())
+			db.output.Println(err.Error())
 
 			continue
 		}
@@ -314,7 +401,7 @@ func (db *DB) handleMatches(root string, files map[string]struct{}) {
 		}
 	}
 
-	fmt.Printf("root: %s, %d found files, %d skipped, %d created, %d deleted\n", root, len(files), skipped, created, deleted)
+	db.output.Printf("root: %s, %d found files, %d skipped, %d created, %d deleted\n", root, len(files), skipped, created, deleted)
 }
 
 func (db *DB) handleMatch(filename string) error {
@@ -371,8 +458,8 @@ func (db *DB) Write() error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	for _, entry := range db.Files {
-		record := []string{entry.Path, strconv.Itoa(entry.Size), entry.Hash}
+	for _, record := range db.Files {
+		record := []string{record.Path, strconv.Itoa(record.Size), record.Hash}
 		err = writer.Write(record)
 		if err != nil {
 			return fmt.Errorf("unable to write record to DB file %s, err: %w", db.dbFile, err)
@@ -407,7 +494,7 @@ func (db *DB) Search(searchType string, searchTerms []string) {
 	}
 
 	if len(allIDs) == 0 {
-		fmt.Println("No results found.")
+		db.output.Println("No results found.")
 
 		return
 	}
@@ -423,7 +510,7 @@ func (db *DB) fastCollectIDs(searchedTerms []string) [][]ID {
 	for _, needle := range searchedTerms {
 		termIDs, ok := db.SearchTerms[needle]
 		if !ok {
-			fmt.Printf("No results found for needle '%s'\n", needle)
+			db.output.Printf("No results found for needle '%s'\n", needle)
 
 			return nil
 		}
@@ -450,6 +537,8 @@ func (db *DB) slowCollectIDs(searchedTerms []string) [][]ID {
 		}
 
 		if len(found) == 0 {
+			db.output.Printf("No results found for needle '%s'\n", needle)
+
 			return nil
 		}
 
@@ -489,28 +578,25 @@ func (db *DB) PrintIDs(ids []ID, searchTerms []string) {
 		ids = ids[:maxLines]
 	}
 
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+
 	for i, id := range ids {
 		record := db.Files[id]
 
-		path := findHighlights(record.Path, searchTerms)
+		path := FindHighlights(record.Path, searchTerms)
 
-		fmt.Printf("[%d] %s (%d MB)\n", i+1, path, record.Size/MB)
+		db.output.Printf("[%d] %s (%d MB)\n", i+1, path, record.Size/MB)
 	}
 
 	if len(ids) >= maxLines {
-		fmt.Println("... (truncated)")
+		db.output.Println("... (truncated)")
 	}
 }
 
-func findHighlights(haystack string, needles []string) string {
+func FindHighlights(haystack string, needles []string) string {
 	var highlights [][2]int
-
-	const (
-		redBold    = "\033[1m\033[31m"
-		yellowBold = "\033[1m\033[33m"
-		blueBold   = "\033[1m\033[43m"
-		reset      = "\033[0m"
-	)
 
 	lower := strings.ToLower(haystack)
 	for _, searchTerm := range needles {
@@ -593,13 +679,46 @@ func (db *DB) Stats(minLength int) {
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
 
-	fmt.Printf("Total entries: %d\n", len(db.Files))
-	fmt.Printf("Total unique sizes: %d\n", len(db.Sizes))
-	fmt.Printf("Total unique search terms: %d\n", len(db.SearchTerms))
-	fmt.Printf("Total unique hashes: %d\n", len(db.Hashes))
-	fmt.Printf("Sizes with multiple entries: %d\n", len(db.Files)-len(db.Sizes))
-	fmt.Printf("Hashes with multiple entries: %d\n", len(db.Files)-len(db.Hashes))
+	db.output.Printf("Total records: %d\n", len(db.Files))
+	db.output.Printf("Total unique sizes: %d\n", len(db.Sizes))
+	db.output.Printf("Total unique search terms: %d\n", len(db.SearchTerms))
+	db.output.Printf("Total unique hashes: %d\n", len(db.Hashes))
 
+	db.sizeStats()
+	db.hashStats()
+
+	db.searchTermStats(minLength)
+}
+
+func (db *DB) sizeStats() {
+	sizesWithMultipleIDs := 0
+
+	for _, ids := range db.Sizes {
+		if len(ids) == 1 {
+			continue
+		}
+
+		sizesWithMultipleIDs++
+	}
+
+	db.output.Printf("Sizes with multiple records: %d\n", sizesWithMultipleIDs)
+}
+
+func (db *DB) hashStats() {
+	hashWithMultipleIDs := 0
+
+	for _, ids := range db.Hashes {
+		if len(ids) == 1 {
+			continue
+		}
+
+		hashWithMultipleIDs++
+	}
+
+	db.output.Printf("Hashes with multiple records: %d\n", hashWithMultipleIDs)
+}
+
+func (db *DB) searchTermStats(minLength int) {
 	searchTermStats := make(map[int]int)
 	for searchTerm, ids := range db.SearchTerms {
 		if len(ids) < 2 {
@@ -622,9 +741,10 @@ func (db *DB) Stats(minLength int) {
 	}
 	sort.Ints(keys)
 
-	fmt.Printf("\nSearch term length distribution:\n")
+	db.output.Println()
+	db.output.Printf("Search term length distribution:\n")
 	for _, length := range keys {
-		fmt.Printf("Search terms with length %d: %d\n", length*5, searchTermStats[length])
+		db.output.Printf("Search terms with length %d: %d\n", length*5, searchTermStats[length])
 	}
 }
 
@@ -671,7 +791,7 @@ func (db *DB) duplicatesBySizeAndHash() {
 
 			groups[groupID] = SearchGroup{
 				IDs:         sizeIDs,
-				SearchTerms: []string{filepath.Base(db.Files[sizeIDs[0]].Path)},
+				SearchTerms: []string{},
 				Type:        SizeAndHash,
 			}
 		}
@@ -703,23 +823,27 @@ func (db *DB) duplicatesBySearchTerm(minLength int) {
 }
 
 func (db *DB) handleDuplicateGroups(searchGroups map[string]SearchGroup) {
+	input := ""
 	iter := 1
 
 	for _, group := range searchGroups {
-		fmt.Printf("Duplicates found: %d (%d / %d) - %s\n", len(group.IDs), iter, len(searchGroups), group.Type)
+		db.output.Printf("Duplicates found: %d (%d / %d) - %s\n", len(group.IDs), iter, len(searchGroups), group.Type)
 
 		iter++
 
 		db.PrintIDs(group.IDs, group.SearchTerms)
 
-		fmt.Println("Delete any files? (comma separated list of numbers)")
+		db.output.Println("Delete any files? (comma separated list of numbers)")
 
-		var input string
-		_, err := fmt.Scanln(&input)
+		err := db.output.Scanln(&input)
 		if err != nil {
-			fmt.Println("Error scanning numbers. Scanned:", input)
-			fmt.Println()
+			db.output.Println("Error scanning numbers. Scanned:", input)
+			db.output.Println()
 
+			continue
+		}
+
+		if len(strings.TrimSpace(input)) == 0 {
 			continue
 		}
 
@@ -728,33 +852,33 @@ func (db *DB) handleDuplicateGroups(searchGroups map[string]SearchGroup) {
 			db.deleteFile(group.IDs, num)
 		}
 
-		fmt.Println()
+		db.output.Println()
 	}
 }
 
 func (db *DB) deleteFile(ids []ID, num string) bool {
 	index, err := strconv.Atoi(strings.TrimSpace(num))
 	if err != nil {
-		fmt.Printf("Invalid number: %s, skipping...\n", num)
+		db.output.Printf("Invalid number: %s, err: %v, skipping...\n", err, num)
 
 		return false
 	}
 
 	if index < 1 || index > len(ids) {
-		fmt.Printf("Invalid index: %d, skipping...\n", index)
+		db.output.Printf("Invalid index: %d, skipping...\n", index)
 
 		return false
 	}
 
 	id := ids[index-1]
 
-	fmt.Println("Deleting", id)
+	db.output.Println("Deleting", id)
 
 	delete(db.Files, id)
 
 	err = os.Remove(string(id))
 	if err != nil {
-		fmt.Printf("Unable to delete file: %s, err: %v\n", id, err)
+		db.output.Printf("Unable to delete file: %s, err: %v\n", id, err)
 
 		return false
 	}

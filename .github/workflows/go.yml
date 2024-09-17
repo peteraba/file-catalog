@@ -13,6 +13,8 @@ jobs:
     environment: build
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
@@ -24,16 +26,15 @@ jobs:
       - name: Run linters and tests
         run: make test
 
-      # - name: Run tests with coverage
-      #   run: |
-      #     mkdir -p coverage
-      #     go test -covermode atomic -coverprofile=covprofile ./...
-      #
-      # - name: Install goveralls
-      #   run: go install github.com/mattn/goveralls@latest
-      #
-      # - name: Send coverage
-      #   env:
-      #     COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #   run: goveralls -coverprofile=covprofile -service=github
+      - name: Run tests with coverage
+        run: |
+          mkdir -p coverage
+          go test -covermode atomic -coverprofile=covprofile ./...
 
+      - name: Install goveralls
+        run: go install github.com/mattn/goveralls@latest
+
+      - name: Send coverage
+        env:
+          COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: goveralls -coverprofile=covprofile -service=github
