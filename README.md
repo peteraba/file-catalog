@@ -1,5 +1,7 @@
 # file-catalog
 
+[![Coverage Status](https://coveralls.io/repos/github/peteraba/file-catalog/badge.svg?branch=main)](https://coveralls.io/github/peteraba/file-catalog?branch=main)
+
 Find duplicates by partial name matches and or hashes.
 
 ## Preparation
