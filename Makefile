@@ -1,3 +1,6 @@
+.PHONY: default
+default: test
+
 .PHONY: install
 install:
 	go install mvdan.cc/gofumpt@latest

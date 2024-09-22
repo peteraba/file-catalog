@@ -267,6 +267,7 @@ type DB struct {
 	SearchTerms map[string][]ID
 	output      Output
 	dbFile      string
+	ids         []ID
 }
 
 func NewDB(output Output, dbFile string) *DB {
@@ -315,6 +316,12 @@ func readCsvFile(filePath string) ([][]string, error) {
 
 func (db *DB) handleRecord(record []string) {
 	filePath := record[0]
+
+	filePath = strings.TrimSpace(filePath)
+
+	if len(filePath) == 0 {
+		return
+	}
 
 	size, err := strconv.Atoi(record[1])
 	if err != nil {
@@ -434,6 +441,7 @@ func (db *DB) handleMatch(filename string) error {
 func (db *DB) add(filePath string, size int, hash string, searchTerms []string) error {
 	id := ID(filePath)
 
+	db.ids = append(db.ids, id)
 	db.Files[id] = Record{Path: filePath, Size: size, Hash: hash, SearchTerms: searchTerms}
 	db.Sizes[size] = append(db.Sizes[size], id)
 	for _, term := range searchTerms {
@@ -458,8 +466,14 @@ func (db *DB) Write() error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	for _, record := range db.Files {
-		record := []string{record.Path, strconv.Itoa(record.Size), record.Hash}
+	ids := db.ids
+
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+
+	for _, id := range db.ids {
+		record := []string{db.Files[id].Path, strconv.Itoa(db.Files[id].Size), db.Files[id].Hash}
 		err = writer.Write(record)
 		if err != nil {
 			return fmt.Errorf("unable to write record to DB file %s, err: %w", db.dbFile, err)
@@ -507,10 +521,10 @@ func (db *DB) Search(searchType string, searchTerms []string) {
 func (db *DB) fastCollectIDs(searchedTerms []string) [][]ID {
 	var results [][]ID
 
-	for _, needle := range searchedTerms {
-		termIDs, ok := db.SearchTerms[needle]
+	for _, searchedTerm := range searchedTerms {
+		termIDs, ok := db.SearchTerms[searchedTerm]
 		if !ok {
-			db.output.Printf("No results found for needle '%s'\n", needle)
+			db.output.Printf("No results found for search term '%s'.\n", searchedTerm)
 
 			return nil
 		}
@@ -528,21 +542,31 @@ func (db *DB) fastCollectIDs(searchedTerms []string) [][]ID {
 func (db *DB) slowCollectIDs(searchedTerms []string) [][]ID {
 	var results [][]ID
 
-	for _, needle := range searchedTerms {
-		var found []ID
+	for _, searchedTerm := range searchedTerms {
+		found := make(map[ID]struct{})
+
 		for term, ids := range db.SearchTerms {
-			if strings.Contains(term, needle) {
-				found = append(found, ids...)
+			if !strings.Contains(term, searchedTerm) {
+				continue
+			}
+
+			for _, id := range ids {
+				found[id] = struct{}{}
 			}
 		}
 
 		if len(found) == 0 {
-			db.output.Printf("No results found for needle '%s'\n", needle)
+			db.output.Printf("No results found for search term '%s'.\n", searchedTerm)
 
 			return nil
 		}
 
-		results = append(results, found)
+		uniqueIDs := []ID{}
+		for id := range found {
+			uniqueIDs = append(uniqueIDs, id)
+		}
+
+		results = append(results, uniqueIDs)
 	}
 
 	return results
