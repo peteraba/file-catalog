@@ -53,6 +53,7 @@ const (
 const (
 	flagMode            = "mode"
 	flagSearchMinLength = "search-min-length"
+	flagForceWrite      = "force-write"
 )
 
 func main() {
@@ -69,11 +70,19 @@ func CreateApp(output Output) *cli.App {
 			{
 				Name:  scanDir,
 				Usage: "Scan will scan a list of directories and store them in the DB file",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:  flagForceWrite,
+						Value: false,
+						Usage: "Force updating a directory, even if it's empty",
+					},
+				},
 				Action: func(cCtx *cli.Context) error {
 					return ScanCommand(
 						output,
 						cCtx.Args().Get(0),
 						cCtx.Args().Slice()[1:],
+						cCtx.Bool(flagForceWrite),
 					)
 				},
 			},
@@ -148,12 +157,12 @@ func CreateApp(output Output) *cli.App {
 	}
 }
 
-func ScanCommand(output Output, dbFile string, roots []string) error {
+func ScanCommand(output Output, dbFile string, roots []string, forceWrite bool) error {
 	db := NewDB(output, dbFile)
 
 	db.Load()
 
-	err := db.Scan(roots...)
+	err := db.Scan(roots, forceWrite)
 	if err != nil {
 		output.Printf("Error scanning directories: %v\n", err)
 		output.Exit(1)
@@ -340,7 +349,7 @@ func (db *DB) handleRecord(record []string) {
 	}
 }
 
-func (db *DB) Scan(roots ...string) error {
+func (db *DB) Scan(roots []string, forceWrite bool) error {
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
 
@@ -348,6 +357,10 @@ func (db *DB) Scan(roots ...string) error {
 		files, err := collectFiles(root)
 		if err != nil {
 			return fmt.Errorf("unable to collect files in root %s, err: %w", root, err)
+		}
+
+		if len(files) == 0 && !forceWrite {
+			continue
 		}
 
 		db.handleMatches(root, files)

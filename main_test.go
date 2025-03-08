@@ -144,7 +144,7 @@ func TestApp_Scan_and_Stats(t *testing.T) {
 
 		// execute
 		// - scan directories
-		err := ScanCommand(output, dbFile, dirNames)
+		err := ScanCommand(output, dbFile, dirNames, false)
 		require.NoError(t, err)
 
 		// - stat
@@ -165,7 +165,7 @@ func TestApp_Scan_and_Stats(t *testing.T) {
 		assert.Equal(t, "Hashes with multiple records: 1\n", output.Get(7))
 	})
 
-	t.Run("success - scan, rescan and stat", func(t *testing.T) {
+	t.Run("success - scan /w forceWrite, rescan and stat", func(t *testing.T) {
 		t.Parallel()
 
 		dbFile, dirNames := setup(t)
@@ -176,7 +176,7 @@ func TestApp_Scan_and_Stats(t *testing.T) {
 
 		// execute
 		// - scan directories
-		err := ScanCommand(output, dbFile, dirNames)
+		err := ScanCommand(output, dbFile, dirNames, true)
 		require.NoError(t, err)
 
 		// delete directory
@@ -187,7 +187,7 @@ func TestApp_Scan_and_Stats(t *testing.T) {
 		defer cleanup(t, dbFile2, dirNames2)
 
 		// - scan directories
-		err = ScanCommand(output, dbFile, []string{dirNames[0], dirNames2[0], dirNames2[1]})
+		err = ScanCommand(output, dbFile, []string{dirNames[0], dirNames2[0], dirNames2[1]}, true)
 		require.NoError(t, err)
 
 		// - stat
@@ -209,6 +209,51 @@ func TestApp_Scan_and_Stats(t *testing.T) {
 		assert.Equal(t, "Total unique hashes: 4\n", output.Get(8))
 		assert.Equal(t, "Sizes with multiple records: 2\n", output.Get(9))
 		assert.Equal(t, "Hashes with multiple records: 2\n", output.Get(10))
+	})
+
+	t.Run("success - scan /wo forceWrite, rescan and stat", func(t *testing.T) {
+		t.Parallel()
+
+		dbFile, dirNames := setup(t)
+		defer cleanup(t, dbFile, dirNames[1:])
+
+		// setup
+		output := NewTestOutput(t, nil)
+
+		// execute
+		// - scan directories
+		err := ScanCommand(output, dbFile, dirNames, false)
+		require.NoError(t, err)
+
+		// delete directory
+		removeDir(t, dirNames[0])
+
+		// execute 2
+		dbFile2, dirNames2 := setup(t)
+		defer cleanup(t, dbFile2, dirNames2)
+
+		// - scan directories
+		err = ScanCommand(output, dbFile, []string{dirNames[0], dirNames2[0], dirNames2[1]}, false)
+		require.NoError(t, err)
+
+		// - stat
+		err = StatsCommand(output, dbFile, defaultMinLength)
+		require.NoError(t, err)
+
+		// verify
+		// - scan dir
+		assert.Equal(t, fmt.Sprintf("root: %s, 2 found files, 0 skipped, 2 created, 0 deleted\n", dirNames[0]), output.Get(0))
+		assert.Equal(t, fmt.Sprintf("root: %s, 2 found files, 0 skipped, 2 created, 0 deleted\n", dirNames[1]), output.Get(1))
+		assert.Equal(t, fmt.Sprintf("root: %s, 2 found files, 0 skipped, 2 created, 0 deleted\n", dirNames2[0]), output.Get(2))
+		assert.Equal(t, fmt.Sprintf("root: %s, 2 found files, 0 skipped, 2 created, 0 deleted\n", dirNames2[1]), output.Get(3))
+
+		// - stats
+		assert.Equal(t, "Total records: 8\n", output.Get(4))
+		assert.Equal(t, "Total unique sizes: 2\n", output.Get(5))
+		assert.Equal(t, "Total unique search terms: 2\n", output.Get(6))
+		assert.Equal(t, "Total unique hashes: 4\n", output.Get(7))
+		assert.Equal(t, "Sizes with multiple records: 2\n", output.Get(8))
+		assert.Equal(t, "Hashes with multiple records: 4\n", output.Get(9))
 	})
 }
 
