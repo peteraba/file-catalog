@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"math/rand/v2"
+	rand "math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"

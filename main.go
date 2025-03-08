@@ -14,10 +14,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/urfave/cli/v2"
+	cli "github.com/urfave/cli/v2"
 )
 
+const VERSION = "0.2.0"
+
 const (
+	version    = "version"
 	scanDir    = "scanDir"
 	termSearch = "termSearch"
 	ts         = "ts"
@@ -67,6 +70,15 @@ func main() {
 func CreateApp(output Output) *cli.App {
 	return &cli.App{
 		Commands: []*cli.Command{
+			{
+				Name:  version,
+				Usage: "Display version",
+				Action: func(cCtx *cli.Context) error {
+					fmt.Println(VERSION)
+
+					return nil
+				},
+			},
 			{
 				Name:  scanDir,
 				Usage: "Scan will scan a list of directories and store them in the DB file",
@@ -512,6 +524,10 @@ func (db *DB) Search(searchType string, searchTerms []string) {
 	defer db.mutex.RUnlock()
 
 	var allIDs [][]ID
+
+	for i := range searchTerms {
+		searchTerms[i] = strings.ToLower(searchTerms[i])
+	}
 
 	switch searchType {
 	case fast:
