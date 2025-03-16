@@ -341,9 +341,9 @@ func TestApp_Duplicates(t *testing.T) {
 		require.NoError(t, err)
 
 		// verify
-		assert.Equal(t, "Duplicates found: 2 (1 / 1) - Search term\n", output.Get(4))
-		assert.Contains(t, cleanColor(t, output.Get(5)), files[3])
-		assert.Contains(t, cleanColor(t, output.Get(6)), files[0])
+		assert.Equal(t, "Duplicates found: 2 (1 / 1) - Search term\n", output.Get(5))
+		assert.Contains(t, cleanColor(t, output.Get(6)), files[3])
+		assert.Contains(t, cleanColor(t, output.Get(7)), files[0])
 	})
 
 	t.Run("failure deleting non-existent file", func(t *testing.T) {
@@ -365,7 +365,7 @@ func TestApp_Duplicates(t *testing.T) {
 		assert.Contains(t, output.Get(2), files[0])
 	})
 
-	t.Run("success finding and delete duplicates by size and hashes", func(t *testing.T) {
+	t.Run("success finding and deleting duplicates by size and hashes", func(t *testing.T) {
 		t.Parallel()
 
 		dbFile := setup(t)
@@ -385,9 +385,9 @@ func TestApp_Duplicates(t *testing.T) {
 		assert.Equal(t, "Duplicates found: 2 (1 / 1) - Size and hash\n", output.Get(0))
 		assert.Contains(t, output.Get(1), files[2])
 		assert.Contains(t, output.Get(2), files[0])
-		assert.Equal(t, "Delete any files? (comma separated list of numbers)\n", output.Get(3))
-		assert.Contains(t, output.Get(4), "Deleting")
-		assert.Contains(t, output.Get(4), files[0])
+		assert.Equal(t, "Delete any files? (comma separated list of numbers)\n", output.Get(4))
+		assert.Contains(t, output.Get(5), "Deleting")
+		assert.Contains(t, output.Get(5), files[0])
 
 		assert.NoFileExists(t, files[2])
 	})
@@ -602,6 +602,588 @@ func Test_FindHighlights(t *testing.T) {
 
 			// verify
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func Test_getSmartTerms(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		haystack string
+	}
+	tests := []struct {
+		name  string
+		args  args
+		want1 []uint64
+		want2 string
+		want3 string
+	}{
+		{
+			name: "without anything",
+			args: args{
+				haystack: "hello world",
+			},
+			want1: []uint64{1 << 30},
+			want2: unknownCategory,
+			want3: unknownDimensions,
+		},
+		{
+			name: "with dimensions",
+			args: args{
+				haystack: "hello world-325x233",
+			},
+			want1: []uint64{1 << 30},
+			want2: unknownCategory,
+			want3: "325x233",
+		},
+		{
+			name: "with well-known",
+			args: args{
+				haystack: "helloworld-fullhd-1080p",
+			},
+			want1: []uint64{1 << 30},
+			want2: unknownCategory,
+			want3: "fullhd-1080p",
+		},
+		{
+			name: "with well-known and description",
+			args: args{
+				haystack: "hello world-2k-1080p",
+			},
+			want1: []uint64{1 << 30},
+			want2: unknownCategory,
+			want3: "2k-1080p",
+		},
+		{
+			name: "with dimensions and description",
+			args: args{
+				haystack: "hello world-960x350-1ffc",
+			},
+			want1: []uint64{1 << 30},
+			want2: unknownCategory,
+			want3: "960x350",
+		},
+		{
+			name: "with dimensions and description, random-case",
+			args: args{
+				haystack: "heLLo wOrld-960x350-1ffc",
+			},
+			want1: []uint64{1 << 30},
+			want2: unknownCategory,
+			want3: "960x350",
+		},
+		{
+			name: "with dimensions and category, random-case",
+			args: args{
+				haystack: "heLLo wOrld-960x350-1ffc-foo-bar-baz",
+			},
+			want1: []uint64{1 << 30},
+			want2: "baz",
+			want3: "960x350",
+		},
+		{
+			name: "with dimensions and category, random-case, phone",
+			args: args{
+				haystack: "heLLo wOrld-960x350-1ffc-foo-phone",
+			},
+			want1: []uint64{1 << 30},
+			want2: "foo",
+			want3: "960x350",
+		},
+		{
+			name: "with dimensions and category, random-case, low quality, cleaned up category",
+			args: args{
+				haystack: "heLLo wOrld-960x350-1ffc-full-low",
+			},
+			want1: []uint64{1 << 30},
+			want2: unknownCategory,
+			want3: "960x350",
+		},
+		{
+			name: "with dimensions and category, random-case, phone, low quality",
+			args: args{
+				haystack: "heLLo wOrld-960x350-1ffc-foo-phone-low",
+			},
+			want1: []uint64{1 << 30},
+			want2: "foo",
+			want3: "960x350",
+		},
+		{
+			name: "with dimensions and category, random-case, low quality, phone",
+			args: args{
+				haystack: "heLLo wOrld-960x350-1ffc-foo-low-phone",
+			},
+			want1: []uint64{1 << 30},
+			want2: "foo",
+			want3: "960x350",
+		},
+		{
+			name: "with prefixes, dimensions and category, random-case, foo category, low quality, phone",
+			args: args{
+				haystack: "foobar-bazbar-quiz-heLLo wOrld-960x350-1ffc-foo-low-phone",
+			},
+			want1: []uint64{1<<30 + 3, 1<<26 + 1, 1 << 26, 1<<24 + 2},
+			want2: "foo",
+			want3: "960x350",
+		},
+		{
+			name: "with prefixes, dimensions and category, random-case, foo category 3, low quality, phone",
+			args: args{
+				haystack: "foobar-bazbar-quiz-heLLo wOrld-960x350-1ffc-foo3-low-phone",
+			},
+			want1: []uint64{1<<30 + 3, 1<<26 + 1, 1 << 26, 1<<24 + 2},
+			want2: "foo",
+			want3: "960x350",
+		},
+		{
+			name: "with prefixes, dimensions and category, random-case, low quality, unkonwn category, phone",
+			args: args{
+				haystack: "foobar-bazbar-quiz-heLLo wOrld-960x350-1ffc-foo-full2-low-phone",
+			},
+			want1: []uint64{1<<30 + 3, 1<<26 + 1, 1 << 26, 1<<24 + 2},
+			want2: unknownCategory,
+			want3: "960x350",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// prepare
+			sdb := NewSmartDB()
+
+			// execute
+			got1, got2, got3, err := sdb.ProcessPath(tt.args.haystack)
+			require.NoError(t, err)
+
+			// verify
+			assert.Equal(t, tt.want1, got1)
+			assert.Equal(t, tt.want2, got2)
+			assert.Equal(t, tt.want3, got3)
+		})
+	}
+}
+
+func Test_getSmartNumber(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		haystacks []string
+		wants     []uint64
+	}{
+		{
+			name:      "empty",
+			haystacks: []string{""},
+			wants:     []uint64{1 << 20},
+		},
+		{
+			name:      "foo",
+			haystacks: []string{"foo"},
+			wants:     []uint64{1 << 23},
+		},
+		{
+			name:      "foo + bar",
+			haystacks: []string{"foo", "bar"},
+			wants:     []uint64{1 << 23, 1<<23 + 1},
+		},
+		{
+			name:      "foo + quix",
+			haystacks: []string{"foo", "quix"},
+			wants:     []uint64{1 << 23, 1<<24 + 1},
+		},
+		{
+			name:      "long",
+			haystacks: []string{"abcdefghijklmnopqrstuvwxyabcdefghijklmnopqrstuvwxyzzabcdefghijklmnopqrstuvwxyz"},
+			wants:     []uint64{1 << 62},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Len(t, tt.haystacks, len(tt.wants))
+
+			sdb := NewSmartDB()
+
+			for i, haystack := range tt.haystacks {
+				// execute
+				got := sdb.GetValue(haystack)
+
+				// verify
+				assert.Equal(t, tt.wants[i], got)
+			}
+		})
+	}
+}
+
+func Test_compareSmart(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		a, b             Record
+		ignoreDirectory  bool
+		ignoreCategory   bool
+		ignoreDimensions bool
+	}
+	tests := []struct {
+		name  string
+		args  args
+		want1 float64
+		want2 int
+	}{
+		{
+			name: "miss",
+			args: args{
+				a: Record{
+					SmartTerms: []uint64{100},
+				},
+				b: Record{
+					SmartTerms: []uint64{99},
+				},
+				ignoreDirectory:  true,
+				ignoreCategory:   false,
+				ignoreDimensions: false,
+			},
+			want1: 0.0,
+			want2: 0,
+		},
+		{
+			name: "single and simple hit",
+			args: args{
+				a: Record{
+					SmartTerms: []uint64{100},
+				},
+				b: Record{
+					SmartTerms: []uint64{100},
+				},
+				ignoreDirectory:  true,
+				ignoreCategory:   false,
+				ignoreDimensions: false,
+			},
+			want1: 100.0,
+			want2: 1,
+		},
+		{
+			name: "single hit, complex",
+			args: args{
+				a: Record{
+					SmartTerms: []uint64{102, 101, 100, 75, 45},
+				},
+				b: Record{
+					SmartTerms: []uint64{200, 150, 140, 100, 77, 23},
+				},
+				ignoreDirectory:  true,
+				ignoreCategory:   false,
+				ignoreDimensions: false,
+			},
+			want1: 100.0,
+			want2: 5,
+		},
+		{
+			name: "multi hit, complex",
+			args: args{
+				a: Record{
+					SmartTerms: []uint64{102, 101, 100, 75, 45},
+				},
+				b: Record{
+					SmartTerms: []uint64{200, 150, 140, 100, 75, 23},
+				},
+				ignoreDirectory:  true,
+				ignoreCategory:   false,
+				ignoreDimensions: false,
+			},
+			want1: 175.0,
+			want2: 5,
+		},
+		{
+			name: "category mismatch",
+			args: args{
+				a: Record{
+					Directory:  "bar/baz",
+					SmartTerms: []uint64{102, 101, 100, 75, 45},
+					Category:   "foo",
+					Dimensions: "fullhd-1080p",
+				},
+				b: Record{
+					Directory:  "bar/quix",
+					SmartTerms: []uint64{200, 150, 140, 100, 75, 23},
+					Category:   "bar",
+					Dimensions: "fullhd-1080p",
+				},
+				ignoreDirectory:  false,
+				ignoreCategory:   false,
+				ignoreDimensions: true,
+			},
+			want1: 0.0,
+			want2: 0,
+		},
+		{
+			name: "dimension mismatch",
+			args: args{
+				a: Record{
+					Directory:  "bar/baz",
+					SmartTerms: []uint64{102, 101, 100, 75, 45},
+					Category:   "foo",
+					Dimensions: "fullhd-1080p",
+				},
+				b: Record{
+					Directory:  "bar/quix",
+					SmartTerms: []uint64{200, 150, 140, 100, 75, 23},
+					Category:   "foo",
+					Dimensions: "320x240",
+				},
+				ignoreDirectory:  false,
+				ignoreCategory:   true,
+				ignoreDimensions: false,
+			},
+			want1: 0.0,
+			want2: 0,
+		},
+		{
+			name: "directory match",
+			args: args{
+				a: Record{
+					Directory:  "bar/baz",
+					SmartTerms: []uint64{102, 101, 100, 75, 45},
+					Category:   "foo",
+					Dimensions: "fullhd-1080p",
+				},
+				b: Record{
+					Directory:  "bar/baz",
+					SmartTerms: []uint64{200, 150, 140, 100, 75, 23},
+					Category:   "foo",
+					Dimensions: "320x240",
+				},
+				ignoreDirectory:  true,
+				ignoreCategory:   false,
+				ignoreDimensions: false,
+			},
+			want1: 0.0,
+			want2: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// execute
+			got1, got2 := compareSmart(tt.args.a, tt.args.b, tt.args.ignoreDirectory, tt.args.ignoreCategory, tt.args.ignoreDimensions)
+
+			// verify
+			assert.Less(t, tt.want1-got1, 0.1)
+			assert.Greater(t, tt.want1-got1, -0.1)
+			assert.Equal(t, tt.want2, got2)
+		})
+	}
+}
+
+func Test_cleanSmart(t *testing.T) {
+	t.Parallel()
+
+	type args struct {
+		m map[float64][][2]ID
+	}
+	tests := []struct {
+		name            string
+		args            args
+		expectedMap     map[float64][][2]ID
+		expectedMinimum float64
+	}{
+		{
+			name: "small",
+			args: args{
+				m: map[float64][][2]ID{
+					2.0: {
+						{"foo", "bar"},
+						{"foo", "quix"},
+					},
+				},
+			},
+			expectedMap: map[float64][][2]ID{
+				2.0: {
+					{"foo", "bar"},
+					{"foo", "quix"},
+				},
+			},
+			expectedMinimum: 2.0,
+		},
+		{
+			name: "keep 1",
+			args: args{
+				m: map[float64][][2]ID{
+					2.0: {
+						{"foo", "bar"},
+						{"foo", "quix"},
+						{"foo", "sorp"},
+						{"bar", "foo"},
+						{"bar", "baz"},
+						{"bar", "quix"},
+						{"quix", "farq"},
+						{"bar", "farq"},
+						{"farq", "quix"},
+						{"sorp", "quix"},
+						{"sorp", "baz"},
+						{"yapp", "baz"},
+					},
+					1.0: {
+						{"foo", "baz"},
+						{"yapp", "foo"},
+					},
+				},
+			},
+			expectedMap: map[float64][][2]ID{
+				2.0: {
+					{"foo", "bar"},
+					{"foo", "quix"},
+					{"foo", "sorp"},
+					{"bar", "foo"},
+					{"bar", "baz"},
+					{"bar", "quix"},
+					{"quix", "farq"},
+					{"bar", "farq"},
+					{"farq", "quix"},
+					{"sorp", "quix"},
+				},
+			},
+			expectedMinimum: 2.0,
+		},
+		{
+			name: "keep 2",
+			args: args{
+				m: map[float64][][2]ID{
+					2.0: {
+						{"foo", "bar"},
+						{"foo", "quix"},
+						{"foo", "sorp"},
+						{"bar", "foo"},
+						{"bar", "baz"},
+						{"bar", "quix"},
+						{"quix", "farq"},
+						{"bar", "farq"},
+					},
+					1.0: {
+						{"foo", "baz"},
+						{"yapp", "foo"},
+						{"farq", "quix"},
+						{"sorp", "quix"},
+						{"sorp", "baz"},
+						{"yapp", "baz"},
+					},
+				},
+			},
+			expectedMap: map[float64][][2]ID{
+				2.0: {
+					{"foo", "bar"},
+					{"foo", "quix"},
+					{"foo", "sorp"},
+					{"bar", "foo"},
+					{"bar", "baz"},
+					{"bar", "quix"},
+					{"quix", "farq"},
+					{"bar", "farq"},
+				},
+				1.0: {
+					{"foo", "baz"},
+					{"yapp", "foo"},
+				},
+			},
+			expectedMinimum: 1.0,
+		},
+		{
+			name: "keep 10",
+			args: args{
+				m: map[float64][][2]ID{
+					1.0: {
+						{"foo", "bar"},
+					},
+					2.0: {
+						{"foo", "quix"},
+					},
+					3.0: {
+						{"foo", "sorp"},
+					},
+					4.0: {
+						{"bar", "foo"},
+					},
+					5.0: {
+						{"bar", "baz"},
+					},
+					6.0: {
+						{"bar", "quix"},
+					},
+					7.0: {
+						{"quix", "farq"},
+					},
+					8.0: {
+						{"bar", "farq"},
+					},
+					9.0: {
+						{"foo", "baz"},
+					},
+					10.0: {
+						{"yapp", "foo"},
+					},
+					11.0: {
+						{"farq", "quix"},
+					},
+					12.0: {
+						{"sorp", "quix"},
+					},
+					13.0: {
+						{"sorp", "baz"},
+					},
+					14.0: {
+						{"yapp", "baz"},
+					},
+				},
+			},
+			expectedMap: map[float64][][2]ID{
+				5.0: {
+					{"bar", "baz"},
+				},
+				6.0: {
+					{"bar", "quix"},
+				},
+				7.0: {
+					{"quix", "farq"},
+				},
+				8.0: {
+					{"bar", "farq"},
+				},
+				9.0: {
+					{"foo", "baz"},
+				},
+				10.0: {
+					{"yapp", "foo"},
+				},
+				11.0: {
+					{"farq", "quix"},
+				},
+				12.0: {
+					{"sorp", "quix"},
+				},
+				13.0: {
+					{"sorp", "baz"},
+				},
+				14.0: {
+					{"yapp", "baz"},
+				},
+			},
+			expectedMinimum: 5.0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// execute
+			actualMap, actualMinimum := cleanSmart(tt.args.m)
+
+			// verify
+			assert.Equal(t, tt.expectedMap, actualMap)
+			assert.Equal(t, tt.expectedMinimum, actualMinimum)
 		})
 	}
 }

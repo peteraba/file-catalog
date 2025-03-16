@@ -5,31 +5,40 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/gosimple/slug"
 	cli "github.com/urfave/cli/v2"
 )
 
 const VERSION = "0.2.0"
 
 const (
-	version    = "version"
-	scanDir    = "scanDir"
-	termSearch = "termSearch"
-	ts         = "ts"
-	fileSearch = "fileSearch"
-	fs         = "fs"
-	stats      = "stats"
-	s          = "s"
-	duplicates = "duplicates"
-	d          = "d"
+	version         = "version"
+	v               = "v"
+	scanDir         = "scanDir"
+	sd              = "sd"
+	termSearch      = "termSearch"
+	ts              = "ts"
+	fileSearch      = "fileSearch"
+	fs              = "fs"
+	stats           = "stats"
+	s               = "s"
+	duplicates      = "duplicates"
+	d               = "d"
+	smartDuplicates = "smartDuplicates"
+	smartD          = "smartd"
+	ignoreList      = "ignoreList"
+	il              = "il"
 )
 
 const (
@@ -54,9 +63,23 @@ const (
 )
 
 const (
-	flagMode            = "mode"
-	flagSearchMinLength = "search-min-length"
-	flagForceWrite      = "force-write"
+	flagMode                    = "mode"
+	flagSearchMinLength         = "search-min-length"
+	flagForceWrite              = "force-write"
+	flagIgnoreDirectoryMatch    = "ignore-directory-mismatch"
+	flagIgnoreCategoryMismatch  = "ignore-category-mismatch"
+	flagIgnoreDimensionMismatch = "ignore-dimensions-mismatch"
+)
+
+const (
+	aliasIdm   = "idm"
+	aliasIcm   = "icm"
+	aliasIdimm = "idimm"
+)
+
+const (
+	unknownCategory   = "unknown"
+	unknownDimensions = "unknown"
 )
 
 func main() {
@@ -71,8 +94,9 @@ func CreateApp(output Output) *cli.App {
 	return &cli.App{
 		Commands: []*cli.Command{
 			{
-				Name:  version,
-				Usage: "Display version",
+				Name:    version,
+				Aliases: []string{v},
+				Usage:   "Display version",
 				Action: func(cCtx *cli.Context) error {
 					fmt.Println(VERSION)
 
@@ -80,8 +104,9 @@ func CreateApp(output Output) *cli.App {
 				},
 			},
 			{
-				Name:  scanDir,
-				Usage: "Scan will scan a list of directories and store them in the DB file",
+				Name:    scanDir,
+				Aliases: []string{sd},
+				Usage:   "Scan will scan a list of directories and store them in the DB file",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{
 						Name:  flagForceWrite,
@@ -148,6 +173,50 @@ func CreateApp(output Output) *cli.App {
 				},
 			},
 			{
+				Name:    smartDuplicates,
+				Aliases: []string{smartD},
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:    flagIgnoreDirectoryMatch,
+						Aliases: []string{aliasIdm},
+						Value:   false,
+						Usage:   "Compare files even if they're in the same directory.",
+					},
+					&cli.BoolFlag{
+						Name:    flagIgnoreCategoryMismatch,
+						Aliases: []string{aliasIcm},
+						Value:   false,
+						Usage:   "Compare files even if they're in non-matching categories",
+					},
+					&cli.BoolFlag{
+						Name:    flagIgnoreDimensionMismatch,
+						Aliases: []string{aliasIdimm},
+						Value:   false,
+						Usage:   "Compare files even if they have different dimensions set",
+					},
+				},
+				Action: func(cCtx *cli.Context) error {
+					return SmartDuplicateCommand(
+						output,
+						cCtx.Args().Get(0),
+						cCtx.Bool(flagIgnoreDirectoryMatch),
+						cCtx.Bool(flagIgnoreCategoryMismatch),
+						cCtx.Bool(flagIgnoreDimensionMismatch),
+					)
+				},
+			},
+			{
+				Name:    ignoreList,
+				Aliases: []string{il},
+				Flags:   []cli.Flag{},
+				Action: func(cCtx *cli.Context) error {
+					return IgnoreListCommand(
+						output,
+						cCtx.Args().Get(0),
+					)
+				},
+			},
+			{
 				Name:    stats,
 				Aliases: []string{s},
 				Flags: []cli.Flag{
@@ -172,7 +241,7 @@ func CreateApp(output Output) *cli.App {
 func ScanCommand(output Output, dbFile string, roots []string, forceWrite bool) error {
 	db := NewDB(output, dbFile)
 
-	db.Load()
+	db.Load(false)
 
 	err := db.Scan(roots, forceWrite)
 	if err != nil {
@@ -192,7 +261,7 @@ func ScanCommand(output Output, dbFile string, roots []string, forceWrite bool) 
 func TermSearchCommand(output Output, dbFile, modeFlag string, searchTerms []string) error {
 	db := NewDB(output, dbFile)
 
-	db.Load()
+	db.Load(false)
 
 	db.Search(modeFlag, searchTerms)
 
@@ -202,7 +271,7 @@ func TermSearchCommand(output Output, dbFile, modeFlag string, searchTerms []str
 func FileSearchCommand(output Output, dbFile, modeFlag, filePath string) error {
 	db := NewDB(output, dbFile)
 
-	db.Load()
+	db.Load(false)
 
 	searchTerms := pathToSearchTerms(filePath)
 
@@ -214,7 +283,7 @@ func FileSearchCommand(output Output, dbFile, modeFlag, filePath string) error {
 func DuplicateCommand(output Output, dbFile string, searchMinLength int) error {
 	db := NewDB(output, dbFile)
 
-	db.Load()
+	db.Load(false)
 
 	db.Duplicates(searchMinLength)
 
@@ -227,10 +296,77 @@ func DuplicateCommand(output Output, dbFile string, searchMinLength int) error {
 	return nil
 }
 
+func SmartDuplicateCommand(output Output, dbFile string, ignoreDirectory, ignoreCategory, ignoreDimensions bool) error {
+	db := NewDB(output, dbFile)
+
+	db.Load(true)
+
+	db.lock.Lock()
+	defer db.lock.Unlock()
+
+	groups := db.smartDuplicates(ignoreDirectory, ignoreCategory, ignoreDimensions)
+
+	db.handleDuplicateGroups(groups)
+
+	err := db.Write()
+	if err != nil {
+		output.Printf("Error writing DB: %v\n", err)
+		output.Exit(1)
+	}
+
+	return nil
+}
+
+var cleanRegexpSpec = regexp.MustCompile(`^[0-9]*[a-z]+$`)
+
+func IgnoreListCommand(output Output, dbFile string) error {
+	db := NewDB(output, dbFile)
+
+	db.Load(false)
+
+	m := make(map[string]int)
+	for _, file := range db.Files {
+		base := filepath.Base(file.Path)
+		if base == strings.ToLower(base) {
+			continue
+		}
+
+		parts := strings.Split(base, "-")
+		for _, part := range parts {
+			if !cleanRegexpSpec.MatchString(part) {
+				break
+			}
+
+			if len(part) < 4 {
+				continue
+			}
+
+			m[part] += 1
+		}
+	}
+
+	ignoreList := make([]string, 0, len(m)/4)
+	for part, count := range m {
+		if count > 5 {
+			ignoreList = append(ignoreList, part)
+		}
+	}
+
+	slices.Sort(ignoreList)
+
+	for _, part := range ignoreList {
+		db.output.Println(part)
+	}
+
+	// db.output.Printf("\n\n%d words found for the ignore list.\n\n", len(ignoreList))
+
+	return nil
+}
+
 func StatsCommand(output Output, dbFile string, searchMinLength int) error {
 	db := NewDB(output, dbFile)
 
-	db.Load()
+	db.Load(false)
 
 	db.Stats(searchMinLength)
 
@@ -255,7 +391,7 @@ func (out *StdOut) Printf(format string, a ...any) {
 }
 
 func (out *StdOut) Scanln(a *string) error {
-	_, err := fmt.Scanln(&a)
+	_, err := fmt.Scanln(a)
 	if err != nil {
 		return fmt.Errorf("error scanning input: %w", err)
 	}
@@ -273,15 +409,19 @@ func NewStdOut() *StdOut {
 
 type Record struct {
 	Path        string
+	Directory   string
 	Size        int
 	Hash        string
 	SearchTerms []string
+	SmartTerms  []uint64
+	Category    string
+	Dimensions  string
 }
 
 type ID string
 
 type DB struct {
-	mutex       *sync.RWMutex
+	lock        *sync.RWMutex
 	Files       map[ID]Record
 	Sizes       map[int][]ID
 	Hashes      map[string][]ID
@@ -289,33 +429,38 @@ type DB struct {
 	output      Output
 	dbFile      string
 	ids         []ID
+	smartDB     *SmartDB
 }
 
 func NewDB(output Output, dbFile string) *DB {
 	return &DB{
-		mutex:       &sync.RWMutex{},
+		lock:        &sync.RWMutex{},
 		Files:       make(map[ID]Record),
 		Sizes:       make(map[int][]ID),
 		Hashes:      make(map[string][]ID),
 		SearchTerms: make(map[string][]ID),
 		output:      output,
 		dbFile:      dbFile,
+		smartDB:     NewSmartDB(),
 	}
 }
 
-func (db *DB) Load() {
-	db.mutex.Lock()
-	defer db.mutex.Unlock()
+func (db *DB) Load(smartTermsNeeded bool) {
+	db.lock.Lock()
+	defer db.lock.Unlock()
 
-	records, err := readCsvFile(db.dbFile)
+	lines, err := readCsvFile(db.dbFile)
 	if err != nil {
 		db.output.Printf("Unable to read DB file '%s', error: %v", db.dbFile, err)
 
 		db.output.Exit(1)
 	}
 
-	for _, record := range records {
-		db.handleRecord(record)
+	for _, columns := range lines {
+		err := db.handleLine(columns, smartTermsNeeded)
+		if err != nil {
+			break
+		}
 	}
 }
 
@@ -335,35 +480,53 @@ func readCsvFile(filePath string) ([][]string, error) {
 	return records, nil
 }
 
-func (db *DB) handleRecord(record []string) {
-	filePath := record[0]
+func (db *DB) handleLine(columns []string, smartTermsNeeded bool) error {
+	filePath := columns[0]
 
 	filePath = strings.TrimSpace(filePath)
 
 	if len(filePath) == 0 {
-		return
+		return nil
 	}
 
-	size, err := strconv.Atoi(record[1])
+	size, err := strconv.Atoi(columns[1])
 	if err != nil {
-		db.output.Println("Unable to parse size from record. File path:", record[0], "Raw data:", record[1], ", error:", err.Error())
+		db.output.Println("Unable to parse size from record. File path:", columns[0], "Raw data:", columns[1], ", error:", err.Error())
 
-		return
+		return err
 	}
 
-	hash := record[2]
+	hash := columns[2]
 
 	searchTerms := pathToSearchTerms(filePath)
 
-	err = db.add(filePath, size, hash, searchTerms)
+	var (
+		smartTerms []uint64
+		category   string
+		dimensions string
+	)
+	if smartTermsNeeded {
+		smartTerms, category, dimensions, err = db.smartDB.ProcessPath(filePath)
+		if err != nil {
+			db.output.Printf("Unable to retrieve smart terms for file. file path: %s, error: %s\n", filePath, err.Error())
+
+			return err
+		}
+	}
+
+	err = db.add(filePath, size, hash, searchTerms, smartTerms, category, dimensions)
 	if err != nil {
 		db.output.Println("Unable to add record to DB, file path:", filePath, ", error:", err.Error())
+
+		return err
 	}
+
+	return nil
 }
 
 func (db *DB) Scan(roots []string, forceWrite bool) error {
-	db.mutex.Lock()
-	defer db.mutex.Unlock()
+	db.lock.Lock()
+	defer db.lock.Unlock()
 
 	for _, root := range roots {
 		files, err := collectFiles(root)
@@ -413,7 +576,8 @@ func (db *DB) handleMatches(root string, files map[string]struct{}) {
 		if err != nil {
 			db.output.Println(err.Error())
 
-			continue
+			break
+			// TODO: continue
 		}
 
 		created++
@@ -455,7 +619,7 @@ func (db *DB) handleMatch(filename string) error {
 		return fmt.Errorf("unable to hash file %s, err: %w", filename, err)
 	}
 
-	err = db.add(filename, int(size), hash, searchTerms)
+	err = db.add(filename, int(size), hash, searchTerms, nil, "", "")
 	if err != nil {
 		return fmt.Errorf("unable to add record to DB, file path: %s, err: %w", filename, err)
 	}
@@ -463,11 +627,20 @@ func (db *DB) handleMatch(filename string) error {
 	return nil
 }
 
-func (db *DB) add(filePath string, size int, hash string, searchTerms []string) error {
+func (db *DB) add(filePath string, size int, hash string, searchTerms []string, smartTerms []uint64, category, dimensions string) error {
 	id := ID(filePath)
 
 	db.ids = append(db.ids, id)
-	db.Files[id] = Record{Path: filePath, Size: size, Hash: hash, SearchTerms: searchTerms}
+	db.Files[id] = Record{
+		Path:        filePath,
+		Directory:   filepath.Dir(filePath),
+		Size:        size,
+		Hash:        hash,
+		SearchTerms: searchTerms,
+		SmartTerms:  smartTerms,
+		Category:    category,
+		Dimensions:  dimensions,
+	}
 	db.Sizes[size] = append(db.Sizes[size], id)
 	for _, term := range searchTerms {
 		db.SearchTerms[term] = append(db.SearchTerms[term], id)
@@ -478,8 +651,8 @@ func (db *DB) add(filePath string, size int, hash string, searchTerms []string) 
 }
 
 func (db *DB) Write() error {
-	db.mutex.RLock()
-	defer db.mutex.RUnlock()
+	db.lock.RLock()
+	defer db.lock.RUnlock()
 
 	// write CSV file from db.Files
 	file, err := os.Create(db.dbFile)
@@ -520,8 +693,8 @@ func pathToSearchTerms(filePath string) []string {
 }
 
 func (db *DB) Search(searchType string, searchTerms []string) {
-	db.mutex.RLock()
-	defer db.mutex.RUnlock()
+	db.lock.RLock()
+	defer db.lock.RUnlock()
 
 	var allIDs [][]ID
 
@@ -728,9 +901,164 @@ func hashFile(path string, sampleSize int) (string, error) {
 	return hex.EncodeToString(sum), nil
 }
 
+type SmartDB struct {
+	internal map[string]uint64
+	lock     *sync.Mutex
+}
+
+func NewSmartDB() *SmartDB {
+	return &SmartDB{
+		internal: make(map[string]uint64),
+		lock:     new(sync.Mutex),
+	}
+}
+
+var descriptionRegexp = regexp.MustCompile(`^(.*)-(\d+[a-z]{2,}.*)$`)
+var dimensionRegexp = regexp.MustCompile(`(.*)-(\d{3,4}x\d{3,4})$`)
+var wellKnownDimensions = []string{
+	"-8k-4320p",
+	"-4k-2160p",
+	"-2k-1080p",
+	"-qhd-1440p",
+	"-fullhd-1080p",
+	"-hd-720p",
+	"-ed-540p",
+	"-sd-480p",
+}
+
+func (sdb *SmartDB) ProcessPath(in string) ([]uint64, string, string, error) {
+	in = filepath.Base(in)
+	ext := filepath.Ext(in)
+	if ext != "" && len(ext) < len(in) {
+		in = in[:len(in)-len(ext)]
+	}
+	finds := descriptionRegexp.FindStringSubmatch(in)
+
+	base := in
+	description := ""
+	if len(finds) > 1 {
+		base = finds[1]
+		description = finds[2]
+	}
+	category := getCategoryFromDescription(description)
+
+	finds = dimensionRegexp.FindStringSubmatch(base)
+	dimensions := unknownDimensions
+	if len(finds) > 1 {
+		base = finds[1]
+		dimensions = finds[2]
+	}
+
+	for _, dim := range wellKnownDimensions {
+		if len(base) > len(dim) && base[len(base)-len(dim):] == dim {
+			base = base[:len(base)-len(dim)]
+			dimensions = dim[1:]
+			break
+		}
+	}
+
+	cleanParts, err := getCleanedParts(base)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	smartTerms := make([]uint64, 0, len(cleanParts))
+	for _, part := range cleanParts {
+		smartTerms = append(smartTerms, sdb.GetValue(part))
+	}
+
+	slices.Sort(smartTerms)
+	slices.Reverse(smartTerms)
+
+	return smartTerms, category, dimensions, nil
+}
+
+var cleanRegexp = regexp.MustCompile(`^[a-z0-9]+$`)
+
+func getCleanedParts(fn string) ([]string, error) {
+	parts := strings.Split(fn, "-")
+
+	for i, part := range parts {
+		if cleanRegexp.MatchString(part) {
+			continue
+		}
+
+		// if i < len(parts)-1 {
+		// 	return nil, fmt.Errorf("unclean part: #%d, part: '%d', of: %s", i, len(parts), part)
+		// }
+
+		parts[i] = cleanPart(part)
+	}
+
+	return parts, nil
+}
+
+var notCategories = []string{"low", "phone", "brut", "cut"}
+var unknownCategories = []string{"full", "clip"}
+
+func getCategoryFromDescription(description string) string {
+	parts := strings.Split(description, "-")
+
+	for i := len(parts) - 1; i >= 1; i-- {
+		skip := false
+		part := strings.TrimRight(parts[i], "123456789")
+
+		for _, word := range unknownCategories {
+			if part == word || len(word) == len(part)-1 && part[:len(part)-2] == word {
+				return unknownCategory
+			}
+		}
+
+		for _, word := range notCategories {
+			if part == word {
+				skip = true
+			}
+		}
+
+		if !skip {
+			return part
+		}
+	}
+
+	return unknownCategory
+}
+
+func cleanPart(in string) string {
+	m := map[string]string{
+		"-": "",
+		"_": "",
+		":": "",
+		" ": "",
+	}
+
+	out := strings.ToLower(in)
+	for k, v := range m {
+		out = strings.ReplaceAll(out, k, v)
+	}
+
+	text := slug.Make(out)
+
+	return text
+}
+
+func (sdb *SmartDB) GetValue(in string) uint64 {
+	sdb.lock.Lock()
+	defer sdb.lock.Unlock()
+
+	if res, ok := sdb.internal[in]; ok {
+		return res
+	}
+
+	length := min(len(in)+20, 62)
+	res := uint64(1<<length) + uint64(len(sdb.internal))
+	sdb.internal[in] = res
+
+	return res
+}
+
 func (db *DB) Stats(minLength int) {
-	db.mutex.RLock()
-	defer db.mutex.RUnlock()
+	db.lock.RLock()
+	defer db.lock.RUnlock()
 
 	db.output.Printf("Total records: %d\n", len(db.Files))
 	db.output.Printf("Total unique sizes: %d\n", len(db.Sizes))
@@ -802,12 +1130,14 @@ func (db *DB) searchTermStats(minLength int) {
 }
 
 func (db *DB) Duplicates(minLength int) {
-	db.mutex.Lock()
-	defer db.mutex.Unlock()
+	db.lock.Lock()
+	defer db.lock.Unlock()
 
-	db.duplicatesBySizeAndHash()
+	groups := db.duplicatesBySizeAndHash()
+	db.handleDuplicateGroups(groups)
 
-	db.duplicatesBySearchTerm(minLength)
+	groups = db.duplicatesBySearchTerm(minLength)
+	db.handleDuplicateGroups(groups)
 }
 
 type SearchType string
@@ -815,6 +1145,7 @@ type SearchType string
 const (
 	SizeAndHash SearchType = "Size and hash"
 	SearchTerm  SearchType = "Search term"
+	Smart       SearchType = "Smart"
 )
 
 type SearchGroup struct {
@@ -823,7 +1154,99 @@ type SearchGroup struct {
 	Type        SearchType
 }
 
-func (db *DB) duplicatesBySizeAndHash() {
+func (db *DB) smartDuplicates(ignoreDirectory, ignoreCategory, ignoreDimensions bool) map[string]SearchGroup {
+	ids := make([]ID, 0, len(db.Files))
+	for id := range db.Files {
+		ids = append(ids, id)
+	}
+
+	maxCompared := int64(len(ids) * (len(ids) - 1) / 2)
+	compared := int64(0)
+	minimum := 0.1
+	stored := 0
+	onePercent := maxCompared / 100
+
+	tmp := make(map[float64][][2]ID)
+	for i := range ids {
+		for j := i + 1; j < len(ids); j++ {
+			compared++
+			cmp, _ := compareSmart(db.Files[ids[i]], db.Files[ids[j]], ignoreDirectory, ignoreCategory, ignoreDimensions)
+			if compared%onePercent == 0 {
+				db.output.Printf("max compared: %d, compared: %d, percent: %d\n", maxCompared, compared, compared*100/maxCompared)
+			}
+			if cmp <= minimum {
+				continue
+			}
+
+			tmp[cmp] = append(tmp[cmp], [2]ID{ids[i], ids[j]})
+			stored++
+
+			if stored%10_000 == 0 {
+				tmp, minimum = cleanSmart(tmp)
+			}
+		}
+	}
+
+	tmp, _ = cleanSmart(tmp)
+
+	groups := make(map[string]SearchGroup)
+	for _, idPairs := range tmp {
+		for _, idPair := range idPairs {
+			r1 := db.Files[idPair[0]]
+			r2 := db.Files[idPair[1]]
+
+			groups[string(idPair[0])] = SearchGroup{
+				IDs:         []ID{idPair[0], idPair[1]},
+				SearchTerms: []string{r1.Category, r2.Category},
+				Type:        Smart,
+			}
+		}
+	}
+
+	return groups
+}
+
+func cleanSmart(m map[float64][][2]ID) (map[float64][][2]ID, float64) {
+	scores := make([]float64, 0, len(m))
+	for score := range m {
+		scores = append(scores, score)
+	}
+
+	slices.Sort(scores)
+	slices.Reverse(scores)
+
+	found := 0
+	minScore := -1.0
+	for _, score := range scores {
+		// Maximum already found we just need to delete entries
+		if minScore > 0.0 {
+			delete(m, score)
+			continue
+		}
+
+		// We haven't reached the limit yet
+		if found+len(m[score]) < 10 {
+			found += len(m[score])
+			continue
+		}
+
+		// Maximum is just found
+		if found+len(m[score]) > 10 {
+			m[score] = m[score][:10-found]
+		}
+
+		minScore = score
+		found += len(m[score])
+	}
+
+	if minScore < 0.0 {
+		return m, scores[len(scores)-1]
+	}
+
+	return m, minScore
+}
+
+func (db *DB) duplicatesBySizeAndHash() map[string]SearchGroup {
 	groups := make(map[string]SearchGroup)
 
 	for hash, ids := range db.Hashes {
@@ -850,10 +1273,10 @@ func (db *DB) duplicatesBySizeAndHash() {
 		}
 	}
 
-	db.handleDuplicateGroups(groups)
+	return groups
 }
 
-func (db *DB) duplicatesBySearchTerm(minLength int) {
+func (db *DB) duplicatesBySearchTerm(minLength int) map[string]SearchGroup {
 	groups := make(map[string]SearchGroup)
 
 	for term, ids := range db.SearchTerms {
@@ -872,11 +1295,10 @@ func (db *DB) duplicatesBySearchTerm(minLength int) {
 		}
 	}
 
-	db.handleDuplicateGroups(groups)
+	return groups
 }
 
 func (db *DB) handleDuplicateGroups(searchGroups map[string]SearchGroup) {
-	input := ""
 	iter := 1
 
 	for _, group := range searchGroups {
@@ -886,11 +1308,19 @@ func (db *DB) handleDuplicateGroups(searchGroups map[string]SearchGroup) {
 
 		db.PrintIDs(group.IDs, group.SearchTerms)
 
+		db.output.Println("Search terms: " + strings.Join(group.SearchTerms, ", "))
 		db.output.Println("Delete any files? (comma separated list of numbers)")
 
+		input := ""
 		err := db.output.Scanln(&input)
 		if err != nil {
-			db.output.Println("Error scanning numbers. Scanned:", input)
+			if err != io.EOF {
+				db.output.Printf("Error scanning numbers. Scanned: '%s'\n", input)
+				db.output.Printf("Error: %s\n", err.Error())
+			} else {
+				db.output.Println("Skipping deletion.")
+			}
+
 			db.output.Println()
 
 			continue
@@ -937,4 +1367,36 @@ func (db *DB) deleteFile(ids []ID, num string) bool {
 	}
 
 	return true
+}
+
+func compareSmart(a, b Record, ignoreDirectory, ignoreCategory, ignoreDimensions bool) (float64, int) {
+	if !ignoreDirectory && a.Directory == b.Directory {
+		return 0.0, 0
+	}
+
+	if !ignoreCategory && a.Category != unknownCategory && b.Category != unknownCategory && a.Category != b.Category {
+		return 0.0, 0
+	}
+
+	if !ignoreDimensions && a.Dimensions != unknownDimensions && b.Dimensions != unknownDimensions && a.Dimensions != b.Dimensions {
+		return 0.0, 0
+	}
+
+	result := 0.0
+
+	var j, count int
+	for _, term := range a.SmartTerms {
+		for ; j < len(b.SmartTerms); j++ {
+			if b.SmartTerms[j] < term {
+				break
+			}
+
+			count++
+			if b.SmartTerms[j] == term {
+				result += float64(term)
+			}
+		}
+	}
+
+	return result, count
 }
