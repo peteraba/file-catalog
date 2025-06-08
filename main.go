@@ -847,6 +847,12 @@ func FindHighlights(haystack string, needles []string) string {
 			return blueBold + haystack + reset
 		}
 
+		if len(haystack) < highlight[1] {
+			fmt.Printf("Unexpected highligh issue. tmp: %d, highlight: %v, haystack: %s", tmp, highlight, haystack)
+
+			return blueBold + haystack + reset
+		}
+
 		parts = append(parts,
 			haystack[tmp:highlight[0]],
 			redBold+haystack[highlight[0]:highlight[1]]+reset)
@@ -982,10 +988,6 @@ func getCleanedParts(fn string) ([]string, error) {
 		if cleanRegexp.MatchString(part) {
 			continue
 		}
-
-		// if i < len(parts)-1 {
-		// 	return nil, fmt.Errorf("unclean part: #%d, part: '%d', of: %s", i, len(parts), part)
-		// }
 
 		parts[i] = cleanPart(part)
 	}
@@ -1154,7 +1156,7 @@ type SearchGroup struct {
 	Type        SearchType
 }
 
-func (db *DB) smartDuplicates(ignoreDirectory, ignoreCategory, ignoreDimensions bool) map[string]SearchGroup {
+func (db *DB) smartDuplicates(ignoreDirectory, ignoreCategory, ignoreDimensions bool) []SearchGroup {
 	ids := make([]ID, 0, len(db.Files))
 	for id := range db.Files {
 		ids = append(ids, id)
@@ -1189,17 +1191,17 @@ func (db *DB) smartDuplicates(ignoreDirectory, ignoreCategory, ignoreDimensions 
 
 	tmp, _ = cleanSmart(tmp)
 
-	groups := make(map[string]SearchGroup)
+	groups := []SearchGroup{}
 	for _, idPairs := range tmp {
 		for _, idPair := range idPairs {
 			r1 := db.Files[idPair[0]]
 			r2 := db.Files[idPair[1]]
 
-			groups[string(idPair[0])] = SearchGroup{
+			groups = append(groups, SearchGroup{
 				IDs:         []ID{idPair[0], idPair[1]},
 				SearchTerms: []string{r1.Category, r2.Category},
 				Type:        Smart,
-			}
+			})
 		}
 	}
 
@@ -1246,10 +1248,10 @@ func cleanSmart(m map[float64][][2]ID) (map[float64][][2]ID, float64) {
 	return m, minScore
 }
 
-func (db *DB) duplicatesBySizeAndHash() map[string]SearchGroup {
-	groups := make(map[string]SearchGroup)
+func (db *DB) duplicatesBySizeAndHash() []SearchGroup {
+	groups := []SearchGroup{}
 
-	for hash, ids := range db.Hashes {
+	for _, ids := range db.Hashes {
 		if len(ids) < 2 {
 			continue
 		}
@@ -1257,27 +1259,48 @@ func (db *DB) duplicatesBySizeAndHash() map[string]SearchGroup {
 		sizes := make(map[int][]ID)
 		for _, id := range ids {
 			size := db.Files[id].Size
+
+			if size < 1000 {
+				continue
+			}
+
 			sizes[size] = append(sizes[size], id)
 		}
 
-		for size, sizeIDs := range sizes {
-			groupID := fmt.Sprintf("%s-%d", hash, size)
+		for _, sizeIDs := range sizes {
+			if len(sizeIDs) < 2 {
+				continue
+			}
 
 			slices.Sort(sizeIDs)
 
-			groups[groupID] = SearchGroup{
+			groups = append(groups, SearchGroup{
 				IDs:         sizeIDs,
 				SearchTerms: []string{},
 				Type:        SizeAndHash,
-			}
+			})
 		}
 	}
+
+	// Sort groups by the path of the first file in each group
+	sort.Slice(groups, func(i, j int) bool {
+		var pathI, pathJ string
+
+		if len(groups[i].IDs) > 0 {
+			pathI = db.Files[groups[i].IDs[0]].Path
+		}
+		if len(groups[j].IDs) > 0 {
+			pathJ = db.Files[groups[j].IDs[0]].Path
+		}
+
+		return pathI < pathJ
+	})
 
 	return groups
 }
 
-func (db *DB) duplicatesBySearchTerm(minLength int) map[string]SearchGroup {
-	groups := make(map[string]SearchGroup)
+func (db *DB) duplicatesBySearchTerm(minLength int) []SearchGroup {
+	groups := []SearchGroup{}
 
 	for term, ids := range db.SearchTerms {
 		if len(ids) < 2 {
@@ -1288,17 +1311,17 @@ func (db *DB) duplicatesBySearchTerm(minLength int) map[string]SearchGroup {
 			continue
 		}
 
-		groups[term] = SearchGroup{
+		groups = append(groups, SearchGroup{
 			IDs:         ids,
 			SearchTerms: []string{term},
 			Type:        SearchTerm,
-		}
+		})
 	}
 
 	return groups
 }
 
-func (db *DB) handleDuplicateGroups(searchGroups map[string]SearchGroup) {
+func (db *DB) handleDuplicateGroups(searchGroups []SearchGroup) {
 	iter := 1
 
 	for _, group := range searchGroups {
@@ -1314,11 +1337,11 @@ func (db *DB) handleDuplicateGroups(searchGroups map[string]SearchGroup) {
 		input := ""
 		err := db.output.Scanln(&input)
 		if err != nil {
-			if err != io.EOF {
+			if strings.Contains(err.Error(), "unexpected newline") || err == io.EOF {
+				db.output.Println("Skipping deletion.")
+			} else {
 				db.output.Printf("Error scanning numbers. Scanned: '%s'\n", input)
 				db.output.Printf("Error: %s\n", err.Error())
-			} else {
-				db.output.Println("Skipping deletion.")
 			}
 
 			db.output.Println()
