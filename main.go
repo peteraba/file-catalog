@@ -23,6 +23,8 @@ import (
 const VERSION = "0.2.0"
 
 const (
+	roots           = "roots"
+	r               = "r"
 	version         = "version"
 	v               = "v"
 	scanDir         = "scanDir"
@@ -120,6 +122,18 @@ func CreateApp(output Output) *cli.App {
 						cCtx.Args().Get(0),
 						cCtx.Args().Slice()[1:],
 						cCtx.Bool(flagForceWrite),
+					)
+				},
+			},
+			{
+				Name:    roots,
+				Aliases: []string{r},
+				Usage:   "Stats for roots",
+				Action: func(cCtx *cli.Context) error {
+					return RootsCommand(
+						output,
+						cCtx.Args().Get(0),
+						cCtx.Args().Slice()[1:],
 					)
 				},
 			},
@@ -253,6 +267,60 @@ func ScanCommand(output Output, dbFile string, roots []string, forceWrite bool) 
 	if err != nil {
 		output.Printf("Error writing DB: %v\n", err)
 		output.Exit(1)
+	}
+
+	return nil
+}
+
+func RootsCommand(output Output, dbFile string, roots []string) error {
+	if len(roots) < 1 {
+		return nil
+	}
+
+	const OTHER = "other"
+
+	db := NewDB(output, dbFile)
+
+	db.Load(false)
+
+	lastRoot := roots[0]
+
+	rootCounts := make(map[string]int)
+	for _, record := range db.Files {
+		if strings.Index(record.Path, lastRoot) == 0 {
+			rootCounts[lastRoot]++
+			continue
+		}
+
+		found := false
+		for _, root := range roots {
+			if strings.Index(record.Path, root) != 0 {
+				continue
+			}
+
+			found = true
+			lastRoot = root
+			rootCounts[root]++
+			break
+		}
+
+		if !found {
+			rootCounts[OTHER]++
+		}
+	}
+
+	for _, root := range roots {
+		count, ok := rootCounts[root]
+		if ok {
+			output.Printf("Root '%s', count: %d.\n", root, count)
+		} else {
+			output.Printf("Root '%s', not found.\n", root)
+		}
+	}
+
+	count, ok := rootCounts[OTHER]
+	if ok {
+		output.Printf("Other count: %d.\n", count)
 	}
 
 	return nil
